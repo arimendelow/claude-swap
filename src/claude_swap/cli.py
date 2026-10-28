@@ -1118,6 +1118,46 @@ def _use_native_tls() -> None:
         pass
 
 
+def _menubar_settings_path():
+    from claude_swap.paths import get_backup_root
+
+    return get_backup_root() / "menubar_settings.json"
+
+
+def _set_menubar_auto_switch(enabled: bool) -> None:
+    from claude_swap.menubar import MenuBarSettings
+
+    path = _menubar_settings_path()
+    settings = MenuBarSettings.load(path)
+    settings.auto_switch_enabled = enabled
+    settings.save(path)
+
+
+def _print_menubar_auto_switch(*, suggest_flag: bool) -> None:
+    """Say whether the menu bar will switch accounts or only show usage.
+
+    The toggle defaults to off and lives only in the menu, so a service
+    installed from a terminal can run for weeks as a display while its owner
+    believes it is switching (it only shows when an account hits its limit).
+    """
+    from claude_swap.menubar import MenuBarSettings
+
+    if MenuBarSettings.load(_menubar_settings_path()).auto_switch_enabled:
+        print("  auto-switch: on")
+        return
+    hint = (
+        "turn it on from the menu, or re-run with --auto-switch"
+        if suggest_flag
+        else "turn it on from the menu, or run "
+        "`cswap menubar --install-service --auto-switch`"
+    )
+    warning(
+        f"  auto-switch: off -- the menu bar shows usage but will not switch "
+        f"accounts; {hint}",
+        file=sys.stderr,
+    )
+
+
 def _menubar_service(args) -> int:
     """Handle ``menubar --install-service|--uninstall-service|--service-status``.
 
@@ -1135,10 +1175,15 @@ def _menubar_service(args) -> int:
         from claude_swap.menubar import framework_build_warning
 
         unsupported = framework_build_warning()
+        # Before install(): it restarts a running service, and the menu bar
+        # reads its toggle once at launch.
+        if args.auto_switch:
+            _set_menubar_auto_switch(True)
         result = launch_agent.install()
         print(f"Menu bar service installed ({result['label']}).")
         print(f"  plist: {result['plist']}")
         print(f"  logs:  {result['stderr_log']}")
+        _print_menubar_auto_switch(suggest_flag=True)
         print(
             dimmed(
                 "It starts at login from now on. Re-run this after a cswap "
@@ -1171,6 +1216,7 @@ def _menubar_service(args) -> int:
     pid = f" (pid {result['pid']})" if result["pid"] else ""
     print(f"Menu bar service: {state}{pid}")
     print(f"  plist: {result['plist']}")
+    _print_menubar_auto_switch(suggest_flag=False)
     if not result["installed"]:
         print(dimmed("launchd still has it loaded, but the plist is gone."))
     return 0
@@ -1402,6 +1448,14 @@ The original flag spellings (%(prog)s --switch, %(prog)s --list, ...) keep worki
         ),
     )
     parser.add_argument(
+        "--auto-switch",
+        action="store_true",
+        help=(
+            "With 'menubar --install-service': turn the menu bar's "
+            "auto-switch on (it defaults to off)"
+        ),
+    )
+    parser.add_argument(
         "--uninstall-service",
         action="store_true",
         help="With 'menubar': stop the LaunchAgent and remove its plist (macOS)",
@@ -1591,6 +1645,9 @@ The original flag spellings (%(prog)s --switch, %(prog)s --list, ...) keep worki
             "--install-service, --uninstall-service and --service-status "
             "can only be used with 'menubar'"
         )
+
+    if args.auto_switch and not args.install_service:
+        parser.error("--auto-switch can only be used with 'menubar --install-service'")
 
     # Self-upgrade runs before switcher init so we don't touch config/keychain
     # just to upgrade the tool itself.
