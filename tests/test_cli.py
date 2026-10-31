@@ -685,7 +685,43 @@ class TestCLI:
             cli.main()
 
         assert exc.value.code == 2
-        assert "--auto-switch can only be used with" in capsys.readouterr().err
+        assert "--auto-switch/--no-auto-switch can only be used with" in capsys.readouterr().err
+
+    def test_install_service_no_auto_switch_turns_the_toggle_off(
+        self, monkeypatch, tmp_path, capsys
+    ):
+        path = self._menubar_settings(monkeypatch, tmp_path)
+        path.write_text(json.dumps({"auto_switch_enabled": True, "title_pct": "5h"}))
+        self._service_harness(
+            monkeypatch, ["cswap", "menubar", "--install-service", "--no-auto-switch"]
+        )
+
+        with pytest.raises(SystemExit) as exc:
+            cli.main()
+
+        assert exc.value.code == 0
+        saved = json.loads(path.read_text())
+        assert saved["auto_switch_enabled"] is False
+        assert saved["title_pct"] == "5h"  # other settings survive
+        assert "auto-switch: off" in capsys.readouterr().err
+
+    def test_install_service_failure_restores_the_toggle(self, monkeypatch, tmp_path):
+        # A failed install must not leave auto-switch changed with no
+        # service running behind it.
+        path = self._menubar_settings(monkeypatch, tmp_path)
+        self._service_harness(
+            monkeypatch, ["cswap", "menubar", "--install-service", "--auto-switch"]
+        )
+
+        def failing_install():
+            raise RuntimeError("bootstrap failed")
+
+        monkeypatch.setattr("claude_swap.launch_agent.install", failing_install)
+
+        with pytest.raises(BaseException):
+            cli.main()
+
+        assert json.loads(path.read_text())["auto_switch_enabled"] is False
 
     def test_plain_menubar_does_not_touch_the_service(self, monkeypatch):
         seen = self._service_harness(monkeypatch, ["cswap", "menubar"])

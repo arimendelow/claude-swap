@@ -1124,13 +1124,16 @@ def _menubar_settings_path():
     return get_backup_root() / "menubar_settings.json"
 
 
-def _set_menubar_auto_switch(enabled: bool) -> None:
+def _set_menubar_auto_switch(enabled: bool) -> bool:
+    """Set the menu bar's auto-switch toggle and return its previous value."""
     from claude_swap.menubar import MenuBarSettings
 
     path = _menubar_settings_path()
     settings = MenuBarSettings.load(path)
+    previous = settings.auto_switch_enabled
     settings.auto_switch_enabled = enabled
     settings.save(path)
+    return previous
 
 
 def _print_menubar_auto_switch(*, suggest_flag: bool) -> None:
@@ -1177,9 +1180,16 @@ def _menubar_service(args) -> int:
         unsupported = framework_build_warning()
         # Before install(): it restarts a running service, and the menu bar
         # reads its toggle once at launch.
-        if args.auto_switch:
-            _set_menubar_auto_switch(True)
-        result = launch_agent.install()
+        previous = None
+        if args.auto_switch is not None:
+            previous = _set_menubar_auto_switch(args.auto_switch)
+        try:
+            result = launch_agent.install()
+        except BaseException:
+            # Don't leave the toggle changed with no service behind it.
+            if previous is not None and previous != args.auto_switch:
+                _set_menubar_auto_switch(previous)
+            raise
         print(f"Menu bar service installed ({result['label']}).")
         print(f"  plist: {result['plist']}")
         print(f"  logs:  {result['stderr_log']}")
@@ -1449,11 +1459,21 @@ The original flag spellings (%(prog)s --switch, %(prog)s --list, ...) keep worki
     )
     parser.add_argument(
         "--auto-switch",
-        action="store_true",
+        dest="auto_switch",
+        action="store_const",
+        const=True,
+        default=None,
         help=(
             "With 'menubar --install-service': turn the menu bar's "
             "auto-switch on (it defaults to off)"
         ),
+    )
+    parser.add_argument(
+        "--no-auto-switch",
+        dest="auto_switch",
+        action="store_const",
+        const=False,
+        help="With 'menubar --install-service': turn the menu bar's auto-switch off",
     )
     parser.add_argument(
         "--uninstall-service",
@@ -1646,8 +1666,11 @@ The original flag spellings (%(prog)s --switch, %(prog)s --list, ...) keep worki
             "can only be used with 'menubar'"
         )
 
-    if args.auto_switch and not args.install_service:
-        parser.error("--auto-switch can only be used with 'menubar --install-service'")
+    if args.auto_switch is not None and not args.install_service:
+        parser.error(
+            "--auto-switch/--no-auto-switch can only be used with "
+            "'menubar --install-service'"
+        )
 
     # Self-upgrade runs before switcher init so we don't touch config/keychain
     # just to upgrade the tool itself.
